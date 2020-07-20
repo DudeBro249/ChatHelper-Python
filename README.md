@@ -34,9 +34,9 @@ client = Client("http://192.168.xx.xxx:8000/", "client1", "12345")
 ```python
 from chatHelper.chat import Server
 
-server = Server(port: int, connections: int)
+server = Server(hostname: str, connections: int)
 ```
-- port is the port that the server will be running on: integer like 8000
+- hostname contains the host and the port that the server will be running on: string like "192.168.xx.xxx:8000"
 -  connections is the number of connections that the server is meant to receive: integer like 2
 
 Returns a Server object and starts the Flask server on your system
