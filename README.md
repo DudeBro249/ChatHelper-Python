@@ -14,7 +14,7 @@ pip install chatHelper
 ### Server
 
 ```python
-from chatHelper.chat import Server
+from chatHelper import Server
 
 server = Server("192.168.xx.xxx:8000", 1)
 ```
@@ -22,7 +22,7 @@ server = Server("192.168.xx.xxx:8000", 1)
 ### Client
 
 ```python
-from chatHelper.chat import Client
+from chatHelper import Client
 
 client = Client("http://192.168.xx.xxx:8000/", "client1", "12345")
 ```
@@ -32,7 +32,7 @@ client = Client("http://192.168.xx.xxx:8000/", "client1", "12345")
 ### Server
 
 ```python
-from chatHelper.chat import Server
+from chatHelper import Server
 
 server = Server(hostname: str, connections: int)
 ```
@@ -44,7 +44,7 @@ Returns a Server object and starts the Flask server on your system
 ### Client
 
 ```python
-from chatHelper.chat import Client
+from chatHelper import Client
 
 client = Client(url: str, name: str, password: str)
 ```
