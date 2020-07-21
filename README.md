@@ -50,7 +50,7 @@ client = Client(url: str, name: str, password: str)
 ```
 
 This will initialize the client.
-- The url parameter represents the url that the client should bind to: string like "http://..."
+- The url parameter represents the url that the client should bind to(normally the url that the server is hosted on): string like "http://..."
 - The name parameter is the name of the client: string like "client1"
 - The password parameter is the password that the client uses to authorize itself to the server when
           getting and sending messages: string like "12345"
@@ -93,10 +93,18 @@ Gets a certain number of messages from the group that the client is part of
 - number is the number of messages you want to receive: integer like 2
 
 
+### Group
+```python
+group = Group(url: str, name: str, clientnames: list)
+```
+Creates a group object so that clients send one message and have that message be sent to every client in the group, like a group chat.
+- The url parameter represents the url that the group should bind to(normally the url that the server is hosted on): string like "http://...
+- The name parameter is the name of the group1: string like "group1" or "myGroup"
+- clientnames is a list of strings of the names of the clients that you want to have in the group: list like ["client1", "client2"]
+
+
 ## Contributing
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
-
-Please make sure to update tests as appropriate.
 
 ## License
 [Apache License 2.0](https://choosealicense.com/licenses/apache-2.0/)
