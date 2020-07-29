@@ -12,10 +12,14 @@ class Server:
         self.port = int(self.port)
         self.host = str(self.host)
 
-        self.connections = connections
+        if(connections == 0):
+            raise Exception('connections cannot be 0!')
+        else:
+            self.connections = connections
+
         self.existingconnections = 0
         self.clients = {} # structure is {clientname: [clientPassword, Queue()]}
-        self.groups = {}  # structure is {groupName: [clientList, Queue()]}
+        self.groups = {}  # structure is {groupName: [clientList, clientPositions, messageList]}
         self.runServer()
     
     def __parseHost(self, hostname: str):
@@ -129,6 +133,26 @@ class Server:
                     return jsonify(messages)
             
             return Response(status=403)
+        
+        @self.app.route("/reset", methods=["POST"])
+        def resetHandler():
+            clientname = str(request.json['clientname'])
+            password = str(request.json['password'])
+
+            if clientname in self.clients.keys() and (self.clients[clientname])[0] == password and self.existingconnections == self.connections:
+                self.existingconnections = 0
+                self.clients = {}
+                self.groups = {}
+
+                for i in range(100):
+                    print("\n")
+                    
+                return Response(status=200)
+            else:
+                return Response(status=400)
+
+            return Response(status=400)
+
 
 
         self.app.run(port=int(self.port), host=str(self.host))
@@ -139,13 +163,13 @@ class Client:
         self.url = str(url)
         self.name = str(name)
         self.password = str(password)
-        self.initialized = int(self.initialize())
+        self.initialized = int(self.__initialize())
         if self.initialized == 1:
             raise Exception(
                 "The client could not be initialized!"
             )
 
-    def initialize(self):
+    def __initialize(self):
         init_url = self.url + "initialize"
         session = requests.Session()
 
@@ -246,6 +270,31 @@ class Client:
             return 1 # Error and exit
         else:
             return response.json()
+    
+    def resetServer(self) -> int:
+        reset_url = self.url + "reset"
+
+        postData = {
+            "clientname": str(self.name),
+            "password": str(self.password)
+        }
+
+        response = requests.post(reset_url, json=postData)
+
+        if response.status_code == 200:
+            return 0 # Clean exit
+        else:
+            return 1 # Error and exit
+        
+        return 1
+    
+    def reinitialize(self):
+        initialized = self.__initialize()
+        if initialized == 1:
+            raise Exception(
+                "The client could not be initialized!"
+            )
+
 
 class Group:
     def __init__(self, url: str, name: str, clientnames: list):
