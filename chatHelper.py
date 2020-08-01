@@ -42,7 +42,7 @@ class Server:
             clientList = list(request.json['clientList'])
 
             if(not(groupName in self.groups.keys()) and self.existingconnections == self.connections):
-                self.groups[groupName] = [clientList, [0 for _ in range(0, len(clientList))], []]
+                self.groups[groupName] = [clientList, [Queue() for _ in range(0, len(clientList))]]
                 return Response(status=200)
             else:
                 return Response(status=400)
@@ -91,7 +91,9 @@ class Server:
             if sender in self.clients.keys() and (self.clients[sender])[0] == clientPassword and self.connections == self.existingconnections:
                 clientList = (self.groups[groupName])[0]
                 if groupName in self.groups.keys() and sender in clientList:
-                    self.groups[groupName][-1].append([sender, message])
+                    for queue in (self.groups[groupName])[-1]:
+                        queue.put([sender, message])
+
                     return Response(status=200)
                 else:
                     return Response(status=400)
@@ -127,21 +129,15 @@ class Server:
             if clientname in self.clients.keys() and (self.clients[clientname])[0] == password and self.existingconnections == self.connections:
                 if groupName in self.groups.keys() and clientname in (self.groups[groupName])[0]:
                     messages = []
-                    
-                    positionLocation: int = (self.groups[groupName])[0].index(clientname)
-                    clientPosition: int = ((self.groups[groupName])[1])[positionLocation]
 
-                    groupMessageArray = (self.groups[groupName])[-1]
-                    
-                    if (clientPosition + number) <= (len(groupMessageArray) + 1):
-                        messages = list(reversed(groupMessageArray))[clientPosition: (clientPosition + number)]
-                    else:
-                        return Response(status=400)
+                    clientQueueLocation: int = int(
+                        (self.groups[groupName])[0].index(clientname)
+                    )
 
-                    clientPosition += number
-                    ((self.groups[groupName])[1])[positionLocation] = clientPosition
+                    clientMessageQueue: Queue = ((self.groups[groupName])[-1])[clientQueueLocation]
 
-                    clientPosition = 0
+                    for i in range(0, int(number)):
+                        messages.append(clientMessageQueue.get())
                     
                     return jsonify(messages)
             
