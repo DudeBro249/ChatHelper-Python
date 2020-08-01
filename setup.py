@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="chatHelper", # Replace with your own username
-    version="1.0.2",
+    version="1.1.3",
     author="WeServe Technologies",
     author_email="appdevdeploy@gmail.com",
     description="High-level chat client API that makes sending messages between computers(using http) easy.",
