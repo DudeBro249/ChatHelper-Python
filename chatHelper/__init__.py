@@ -1,1 +1,1 @@
-from .chat import Server, Group, Client
+from .chat import Server, Group, Client, Message

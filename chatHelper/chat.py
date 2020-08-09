@@ -1,7 +1,9 @@
+from typing import List
 from flask import Flask, Response, jsonify, request
 import requests
 from queue import Queue
-from time import sleep
+import json
+from threading import Thread
 
 
 class Server:
@@ -19,30 +21,37 @@ class Server:
 
         self.existingconnections = 0
         self.clients = {} # structure is {clientname: [clientPassword, Queue()]}
-        self.groups = {}  # structure is {groupName: [clientList, clientPositions, messageList]}
+        self.groups = {}  # structure is {groupname: clientList}
         self.runServer()
     
-    def __parseHost(self, hostname: str):
+    def __parseHost(self, hostname: str) -> tuple:
         split_hostname = hostname.split(":")
         return (split_hostname[0], split_hostname[1])
+    
+    def __isAuth(self, clientname: str, password: str) -> bool:
+        return (clientname in self.clients.keys() and self.clients[clientname][0] == password)
+    
+    def __isReady(self) -> bool:
+        return self.existingconnections == self.connections
 
-    def runServer(self):
+    def runServer(self) -> None:
         @self.app.route("/")
         def home():
             return "connected"
 
-        @self.app.route("/checkClient", methods=['POST'])
+        @self.app.route("/checkClient", methods=["POST"])
         def checkClientHandler():
             clientname = str(request.json['clientname'])
             return jsonify(clientname in self.clients.keys())
 
-        @self.app.route("/initializeGroup", methods=['POST'])
+        @self.app.route("/initializeGroup", methods=["POST"])
         def initializeGroupHandler():
-            groupName = str(request.json['groupName'])
-            clientList = list(request.json['clientList'])
+            data = request.get_json()
+            groupName = str(data['groupName'])
+            clientList = list(data['clientList'])
 
-            if(not(groupName in self.groups.keys()) and self.existingconnections == self.connections):
-                self.groups[groupName] = [clientList, [Queue() for _ in range(0, len(clientList))]]
+            if (groupName not in self.groups.keys()) and self.__isReady():
+                self.groups[groupName] = clientList
                 return Response(status=200)
             else:
                 return Response(status=400)
@@ -52,103 +61,65 @@ class Server:
             clientname = str(request.json['clientname'])
             password = str(request.json['password'])
 
+            def event_stream():
+                while True:
+                    if self.__isReady():
+                        yield json.dumps({
+                            "message": "ready"
+                        })
+                        break
+
             if(not(clientname in self.clients.keys()) and self.existingconnections < self.connections):
                 self.clients[clientname] = [password, Queue()]
                 self.existingconnections += 1
-                return jsonify(
-                    [self.existingconnections, self.connections])
-            elif(clientname in self.clients.keys() and self.clients[clientname][0] != password or (self.existingconnections == self.connections)):
+                return Response(event_stream(), status=200)
+            else:
                 return Response(status=400)
-            elif(clientname in self.clients.keys() and self.clients[clientname][0] == password and self.existingconnections < self.connections):
-                return jsonify(
-                    [self.existingconnections, self.connections])
-
-            return Response(status=400)
 
         @self.app.route("/sendmessage", methods=['POST'])
         def sendHandler():
-            recipient = str(request.json['recipient'])
-            message = str(request.json['message'])
-            sender = str(request.json['clientname'])
-            clientPassword = str(request.json['password'])
+            data = request.get_json()
+            recipient = str(data['recipient'])
+            message = str(data['message'])
+            author = str(data['clientname'])
+            password = str(data['password'])
 
-            if sender in self.clients.keys() and (self.clients[sender])[0] == clientPassword and recipient in self.clients.keys() and self.existingconnections == self.connections:
-                # list form = [sender, message]
-                self.clients[recipient][-1].put([sender, message])
+            if self.__isAuth(author, password) and recipient in self.clients.keys() and self.__isReady():
+                # list form = [sender, message, isGroupMessage]
+                self.clients[recipient][-1].put([author, message, False])
                 return Response(status=200)
             else:
                 return Response(status=400)
 
-            return Response(status=400)
         
         @self.app.route("/sendGroupMessage", methods=['POST'])
         def sendGroupMessageHandler():
             sender = str(request.json['clientname'])
-            clientPassword = str(request.json['password'])
+            password = str(request.json['password'])
             message = str(request.json['message'])
             groupName = str(request.json['groupName'])
 
-            if sender in self.clients.keys() and (self.clients[sender])[0] == clientPassword and self.connections == self.existingconnections:
-                clientList = (self.groups[groupName])[0]
-                if groupName in self.groups.keys() and sender in clientList:
-                    for queue in (self.groups[groupName])[-1]:
-                        queue.put([sender, message])
+            if self.__isAuth(sender, password) and self.__isReady():
+                clientList: List[str] = self.groups[groupName]
+                print(clientList)
+                for client in clientList:
+                    print(client)
+                    if client != sender:
+                        self.clients[client][-1].put([
+                            sender, message, True, groupName
+                        ])
 
-                    return Response(status=200)
-                else:
-                    return Response(status=400)
+                return Response(status=200)
             else:
                 return Response(status=400)
-            
 
-        @self.app.route("/getmessage", methods=['POST'])
-        def getHandler():
-            clientname = str(request.json['clientname'])
-            password = str(request.json['password'])
-            number = str(request.json['number'])
-
-            messages = []
-            if clientname in self.clients.keys() and (self.clients[clientname])[0] == password and self.existingconnections == self.connections:
-                for i in range(0, int(number)):
-                    messages.append(self.clients[clientname][-1].get())
-
-                return jsonify(messages)
-            else:
-                return Response(status=403)
-
-            return Response(status=403)
-        
-        @self.app.route("/getGroupMessage", methods=['POST'])
-        def getGroupMessageHandler():
-            clientname = str(request.json['clientname'])
-            password = str(request.json['password'])
-            groupName = str(request.json['groupName'])
-            number = str(request.json['number'])
-
-            number = int(number)
-            if clientname in self.clients.keys() and (self.clients[clientname])[0] == password and self.existingconnections == self.connections:
-                if groupName in self.groups.keys() and clientname in (self.groups[groupName])[0]:
-                    messages = []
-
-                    clientQueueLocation: int = int(
-                        (self.groups[groupName])[0].index(clientname)
-                    )
-
-                    clientMessageQueue: Queue = ((self.groups[groupName])[-1])[clientQueueLocation]
-
-                    for i in range(0, int(number)):
-                        messages.append(clientMessageQueue.get())
-                    
-                    return jsonify(messages)
-            
-            return Response(status=403)
         
         @self.app.route("/reset", methods=["POST"])
         def resetHandler():
             clientname = str(request.json['clientname'])
             password = str(request.json['password'])
 
-            if clientname in self.clients.keys() and (self.clients[clientname])[0] == password and self.existingconnections == self.connections:
+            if self.__isAuth(clientname, password) and self.__isReady():
                 self.existingconnections = 0
                 self.clients = {}
                 self.groups = {}
@@ -156,16 +127,41 @@ class Server:
                 return Response(status=200)
             else:
                 return Response(status=400)
+        
+        @self.app.route("/listen", methods=['POST'])
+        def listenHandler():
+            data = request.get_json()
+            clientname = str(data['clientname'])
+            password = str(data['password'])
+            print(f"GOT LISTEN REQUEST FROM {clientname}")
 
-            return Response(status=400)
+            def event_stream():
+                clientQueue: Queue = self.clients[clientname][-1]
+                while True:
+                    print('DATTI THINGS ARE HAPPENING')
+                    messages = json.dumps(clientQueue.get(block=True))
+                    print(f"{clientname} should be receiving this")
+                    print(messages)
+                    return messages
+            
+            if self.__isAuth(clientname, password) and self.__isReady():
+                print("Will return 200 level response now...")
+                return Response(event_stream(), status=200)
+            else:
+                return Response(status=403)
 
 
-
-        self.app.run(port=int(self.port), host=str(self.host))
+        self.app.run(port=int(self.port), host=str(self.host), threaded=True)
 
 
 class Client:
+    url: str = None
+    name: str = None
+    password: str = None
+    initialized: int = None
+    stop_listening: bool = None
     def __init__(self, url, name, password):
+        self.stop_listening = False
         self.url = str(url)
         self.name = str(name)
         self.password = str(password)
@@ -177,42 +173,17 @@ class Client:
 
     def __initialize(self):
         init_url = self.url + "initialize"
-        session = requests.Session()
 
-        information = []
-        initialized = 1
-        waiting = 1
-        num_requests_made = 0
-
-        while(True):
-            postData = {
-                "clientname": str(self.name),
-                "password": str(self.password)
-            }
-            response = session.post(init_url, json=postData)
-
-            num_requests_made += 1
-
-            if response.status_code == 200:
-                initialized = 0
-                waiting = 1
-
-                information = response.json()
-                if information[0] < information[1]:
-                    waiting = 1
-                    sleep(2)
-                elif information[0] == information[1]:
-                    waiting = 0
-                    break
-            elif response.status_code == 400:
-                if num_requests_made == 1:
-                    initialized = 1
-                    return initialized
-                elif num_requests_made > 1 and initialized == 0:
-                    waiting = 0
-                    break
-
-        return initialized
+        postData = {
+            "clientname": str(self.name),
+            "password": str(self.password)
+        }
+        
+        response = requests.post(init_url, json=postData)
+        if response.status_code == 200:
+            return 0 # Clean exit
+        else:
+            return 1 # Error and exit
 
     def sendMessage(self, recipient, message):
         send_url = self.url + "sendmessage"
@@ -236,46 +207,51 @@ class Client:
         postData = {
             "clientname": self.name,
             "password": self.password,
-            "message": message,
-            "groupName": groupName
+            "message": str(message),
+            "groupName": str(groupName)
         }
 
         response = requests.post(send_url, json=postData)
         if response.status_code == 400:
             return 1 # Error and exit
         else:
-            return 0 # Clean exit 
-
-    def getMessage(self, number: int):
-        get_url = self.url + "getmessage"
-
-        postData = {
-            "clientname": str(self.name),
-            "password": str(self.password),
-            "number": str(number)
-        }
-        response = requests.post(get_url, json=postData)
-        if response.status_code == 403:
-            return 1  # Error and exit
-        else:
-            return response.json()  # return the list of messages
+            return 0 # Clean exit
     
-    def getGroupMessage(self, groupName: str, number: int):
-        get_url = self.url + "getGroupMessage"
+    def startListening(self, onMessage=None):
+        if onMessage == None:
+            raise Exception("The onMessage parameter of this function cannot be none. This parameter must also be a function")
+        listen_url = self.url + 'listen'
+        session = requests.Session()
 
         postData = {
             "clientname": str(self.name),
-            "password": str(self.password),
-            "groupName": str(groupName),
-            "number": str(number)
+            "password": str(self.password)
         }
+        
+        def listen():
+            while True:
+                response = session.post(listen_url, json=postData)
+                if response.status_code == 200:
+                    message_data = list(response.json())
+                    if len(message_data) < 4:
+                        group_name = None
+                    else:
+                        group_name = message_data[3]
+                
+                    message_object = Message(
+                        author=message_data[0],
+                        content=message_data[1],
+                        is_group_message=message_data[2],
+                        group_name=group_name
+                    )
+                    onMessage(message_object)
+                else:
+                    raise Exception("This client has not been initialized!")
+        
+        listener_thread = Thread(target=listen)
+        listener_thread.start()
 
-        response = requests.post(get_url, json=postData)
-
-        if response.status_code == 403 or response.status_code == 400:
-            return 1 # Error and exit
-        else:
-            return response.json()
+ 
     
     def resetServer(self) -> int:
         reset_url = self.url + "reset"
@@ -286,13 +262,13 @@ class Client:
         }
 
         response = requests.post(reset_url, json=postData)
+        self.stopListening()
 
         if response.status_code == 200:
             return 0 # Clean exit
         else:
             return 1 # Error and exit
-        
-        return 1
+    
     
     def reinitialize(self):
         initialized = self.__initialize()
@@ -362,3 +338,15 @@ class Group:
             1) There is already a group with this name.\n
             2) The number of connections have not been fullfilled yet.'''
             raise Exception(error_string)
+
+
+class Message:
+    author: str = None
+    content: str = None
+    is_group_message: bool = None
+    group_name: str = None
+    def __init__(self, author, content, is_group_message, group_name=None):
+        self.author = author
+        self.content = content
+        self.is_group_message = is_group_message
+        self.group_name = group_name
