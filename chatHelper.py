@@ -56,10 +56,9 @@ class Server:
             else:
                 return Response(status=400)
 
-        @self.app.route("/initialize", methods=['POST'])
+        @self.app.route("/initialize", methods=['GET'])
         def initializeHandler():
-            clientname = str(request.json['clientname'])
-            password = str(request.json['password'])
+            [clientname, password] = list(request.headers.get('Authorization').split(':'))
 
             def event_stream():
                 while True:
@@ -78,11 +77,10 @@ class Server:
 
         @self.app.route("/sendmessage", methods=['POST'])
         def sendHandler():
+            [author, password] = list(request.headers.get('Authorization').split(':'))
             data = request.get_json()
             recipient = str(data['recipient'])
             message = str(data['message'])
-            author = str(data['clientname'])
-            password = str(data['password'])
 
             if self.__isAuth(author, password) and recipient in self.clients.keys() and self.__isReady():
                 # list form = [sender, message, isGroupMessage]
@@ -94,16 +92,14 @@ class Server:
         
         @self.app.route("/sendGroupMessage", methods=['POST'])
         def sendGroupMessageHandler():
-            sender = str(request.json['clientname'])
-            password = str(request.json['password'])
-            message = str(request.json['message'])
-            groupName = str(request.json['groupName'])
+            [sender, password] = list(request.headers.get('Authorization').split(':'))
+            data = request.get_json()
+            message = str(data['message'])
+            groupName = str(data['groupName'])
 
             if self.__isAuth(sender, password) and self.__isReady():
                 clientList: List[str] = self.groups[groupName]
-                print(clientList)
                 for client in clientList:
-                    print(client)
                     if client != sender:
                         self.clients[client][-1].put([
                             sender, message, True, groupName
@@ -128,24 +124,17 @@ class Server:
             else:
                 return Response(status=400)
         
-        @self.app.route("/listen", methods=['POST'])
+        @self.app.route("/listen", methods=['GET'])
         def listenHandler():
-            data = request.get_json()
-            clientname = str(data['clientname'])
-            password = str(data['password'])
-            print(f"GOT LISTEN REQUEST FROM {clientname}")
+            [clientname, password] = list(request.headers.get('Authorization').split(':'))
 
             def event_stream():
                 clientQueue: Queue = self.clients[clientname][-1]
                 while True:
-                    print('DATTI THINGS ARE HAPPENING')
                     messages = json.dumps(clientQueue.get(block=True))
-                    print(f"{clientname} should be receiving this")
-                    print(messages)
                     return messages
             
             if self.__isAuth(clientname, password) and self.__isReady():
-                print("Will return 200 level response now...")
                 return Response(event_stream(), status=200)
             else:
                 return Response(status=403)
@@ -165,21 +154,27 @@ class Client:
         self.url = str(url)
         self.name = str(name)
         self.password = str(password)
+        self.__validate()
         self.initialized = int(self.__initialize())
         if self.initialized == 1:
             raise Exception(
                 "The client could not be initialized!"
             )
+    
+    def __validate(self):
+        if ':' in self.name or ':' in self.password:
+            raise Exception(
+                "The name and password parameters cannot have a colon!"
+            )
 
     def __initialize(self):
         init_url = self.url + "initialize"
 
-        postData = {
-            "clientname": str(self.name),
-            "password": str(self.password)
+        headers = {
+            'Authorization': f'{self.name}:{self.password}'
         }
-        
-        response = requests.post(init_url, json=postData)
+
+        response = requests.get(init_url, headers=headers)
         if response.status_code == 200:
             return 0 # Clean exit
         else:
@@ -188,30 +183,34 @@ class Client:
     def sendMessage(self, recipient, message):
         send_url = self.url + "sendmessage"
 
+        headers = {
+            'Authorization': f'{self.name}:{self.password}'
+        }
         postData = {
             "recipient": str(recipient),
             "message": str(message),
-            "clientname": str(self.name),
-            "password": str(self.password)
         }
+
         response = requests.post(
-            send_url, json=postData)
-        if response.status_code == 400:
-            return 1  # Error and exit
-        else:
+            send_url, json=postData, headers=headers)
+        if response.status_code == 200:
             return 0  # Clean exit
+        else:
+            return 1  # Error and exit
 
     def sendGroupMessage(self, groupName: str, message: str):
         send_url = self.url + "sendGroupMessage"
 
+        headers = {
+            'Authorization': f'{self.name}:{self.password}'
+        }
+
         postData = {
-            "clientname": self.name,
-            "password": self.password,
             "message": str(message),
             "groupName": str(groupName)
         }
 
-        response = requests.post(send_url, json=postData)
+        response = requests.post(send_url, json=postData, headers=headers)
         if response.status_code == 400:
             return 1 # Error and exit
         else:
@@ -223,14 +222,13 @@ class Client:
         listen_url = self.url + 'listen'
         session = requests.Session()
 
-        postData = {
-            "clientname": str(self.name),
-            "password": str(self.password)
+        headers = {
+            'Authorization': f'{self.name}:{self.password}'
         }
         
         def listen():
             while True:
-                response = session.post(listen_url, json=postData)
+                response = session.get(listen_url, headers=headers)
                 if response.status_code == 200:
                     message_data = list(response.json())
                     if len(message_data) < 4:

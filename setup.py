@@ -5,13 +5,13 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="chatHelper", # Replace with your own username
-    version="1.1.4",
+    version="1.1.5",
     author="WeServe Technologies",
     author_email="appdevdeploy@gmail.com",
     description="High-level chat client API that makes sending messages between computers(using http) easy.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/DudeBro249/ChatFlow-Python",
+    url="https://github.com/DudeBro249/ChatHelper-Python/",
     packages=["chatHelper"],
     include_package_data=True,
     classifiers=[
