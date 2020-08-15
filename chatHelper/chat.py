@@ -1,9 +1,10 @@
-from typing import List
 from flask import Flask, Response, jsonify, request
 import requests
-from queue import Queue
+from queue import Queue, Empty
 import json
 from threading import Thread
+import time
+from sseclient import SSEClient
 
 
 class Server:
@@ -67,6 +68,10 @@ class Server:
                             "message": "ready"
                         })
                         break
+                    else:
+                        data = json.dumps({"message": "not ready"})
+                        yield f'{data}\n\n'
+                        time.sleep(3)
 
             if(not(clientname in self.clients.keys()) and self.existingconnections < self.connections):
                 self.clients[clientname] = [password, Queue()]
@@ -98,7 +103,7 @@ class Server:
             groupName = str(data['groupName'])
 
             if self.__isAuth(sender, password) and self.__isReady():
-                clientList: List[str] = self.groups[groupName]
+                clientList: list = self.groups[groupName]
                 for client in clientList:
                     if client != sender:
                         self.clients[client][-1].put([
@@ -110,10 +115,9 @@ class Server:
                 return Response(status=400)
 
         
-        @self.app.route("/reset", methods=["POST"])
+        @self.app.route("/reset", methods=["GET"])
         def resetHandler():
-            clientname = str(request.json['clientname'])
-            password = str(request.json['password'])
+            [clientname, password] = list(request.headers.get('Authorization').split(':'))
 
             if self.__isAuth(clientname, password) and self.__isReady():
                 self.existingconnections = 0
@@ -131,8 +135,12 @@ class Server:
             def event_stream():
                 clientQueue: Queue = self.clients[clientname][-1]
                 while True:
-                    messages = json.dumps(clientQueue.get(block=True))
-                    return messages
+                    try:
+                        messages = json.dumps(clientQueue.get(block=False))
+                    except Empty as e:
+                        messages = 'no messages'
+                    yield f'data: {messages}\n\n'
+                    time.sleep(0.25)
             
             if self.__isAuth(clientname, password) and self.__isReady():
                 return Response(event_stream(), status=200)
@@ -148,18 +156,16 @@ class Client:
     name: str = None
     password: str = None
     initialized: int = None
-    stop_listening: bool = None
+    __stop_listening: bool = None
+
     def __init__(self, url, name, password):
-        self.stop_listening = False
+        self.__stop_listening = False
         self.url = str(url)
         self.name = str(name)
         self.password = str(password)
+
         self.__validate()
-        self.initialized = int(self.__initialize())
-        if self.initialized == 1:
-            raise Exception(
-                "The client could not be initialized!"
-            )
+        self.__initialize()
     
     def __validate(self):
         if ':' in self.name or ':' in self.password:
@@ -174,11 +180,21 @@ class Client:
             'Authorization': f'{self.name}:{self.password}'
         }
 
-        response = requests.get(init_url, headers=headers)
-        if response.status_code == 200:
-            return 0 # Clean exit
-        else:
-            return 1 # Error and exit
+        while True:
+            response = requests.get(init_url, headers=headers)
+            if response.status_code != 200:
+                raise Exception(
+                    "The client could not be initialized!"
+                )
+            
+            responseList = response.text.split('\n\n')
+            responseList = [json.loads(responseList[i]) for i in range(0, len(responseList))]
+            if responseList[-1]['message'] == 'ready':
+                break
+
+            
+        
+
 
     def sendMessage(self, recipient, message):
         send_url = self.url + "sendmessage"
@@ -215,7 +231,8 @@ class Client:
             return 1 # Error and exit
         else:
             return 0 # Clean exit
-    
+
+
     def startListening(self, onMessage=None):
         if onMessage == None:
             raise Exception("The onMessage parameter of this function cannot be none. This parameter must also be a function")
@@ -226,25 +243,25 @@ class Client:
             'Authorization': f'{self.name}:{self.password}'
         }
         
-        def listen():
-            while True:
-                response = session.get(listen_url, headers=headers)
-                if response.status_code == 200:
-                    message_data = list(response.json())
-                    if len(message_data) < 4:
+        def listen() -> None:
+            eventSource = SSEClient(listen_url, session=session, headers=headers)
+            for event in eventSource:
+                message_data = ''.join(list(event.data))
+                if message_data != 'no messages':
+                    message_attributes = json.loads(message_data)
+                    if len(message_attributes) < 4:
                         group_name = None
                     else:
-                        group_name = message_data[3]
-                
-                    message_object = Message(
-                        author=message_data[0],
-                        content=message_data[1],
-                        is_group_message=message_data[2],
+                        group_name = message_attributes[3]
+
+                    onMessage(Message(
+                        author=message_attributes[0],
+                        content=message_attributes[1],
+                        is_group_message=message_attributes[2],
                         group_name=group_name
-                    )
-                    onMessage(message_object)
-                else:
-                    raise Exception("This client has not been initialized!")
+                    )) 
+                
+
         
         listener_thread = Thread(target=listen)
         listener_thread.start()
@@ -254,26 +271,24 @@ class Client:
     def resetServer(self) -> int:
         reset_url = self.url + "reset"
 
-        postData = {
-            "clientname": str(self.name),
-            "password": str(self.password)
+        headers = {
+            'Authorization': f'{self.name}:{self.password}'
         }
 
-        response = requests.post(reset_url, json=postData)
         self.stopListening()
+        response = requests.get(reset_url, headers=headers)
 
         if response.status_code == 200:
             return 0 # Clean exit
         else:
             return 1 # Error and exit
     
+    def stopListening(self):
+        self.__stop_listening = True
+    
     
     def reinitialize(self):
-        initialized = self.__initialize()
-        if initialized == 1:
-            raise Exception(
-                "The client could not be initialized!"
-            )
+        self.__initialize()
 
 
 class Group:
