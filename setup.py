@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="chatHelper", # Replace with your own username
-    version="1.1.7",
+    version="1.1.8",
     author="WeServe Technologies",
     author_email="appdevdeploy@gmail.com",
     description="High-level chat client API that makes sending messages between computers(using http) easy.",
@@ -20,5 +20,5 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     python_requires='>=3.5',
-    install_requires= ["Flask", "requests", "sseclient"]
+    install_requires= ["Flask", "requests"]
 )

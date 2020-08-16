@@ -1,4 +1,5 @@
 from flask import Flask, Response, jsonify, request
+from flask.cli import AppGroup, cli
 import requests
 from queue import Queue, Empty
 import json
@@ -7,62 +8,47 @@ import time
 
 
 class Server:
-    def __init__(self, hostname: str, connections: int):
-        self.app = Flask(__name__)
+    
+    @classmethod
+    def createApp(cls, connections: int):
+        app = Flask(__name__)
 
-        self.host, self.port = self.__parseHost(hostname)
-        self.port = int(self.port)
-        self.host = str(self.host)
-
+        app.config['EXISTINGCONNECTIONS'] = 0
+        app.config['CLIENTS'] = {}
+        app.config['GROUPS'] = {}
         if(connections == 0):
             raise Exception('connections cannot be 0!')
         else:
-            self.connections = connections
+            app.config['CONNECTIONS'] = connections
 
-        self.existingconnections = 0
-        self.clients = {} # structure is {clientname: [clientPassword, Queue()]}
-        self.groups = {}  # structure is {groupname: clientList}
-        self.runServer()
-    
-    def __parseHost(self, hostname: str) -> tuple:
-        split_hostname = hostname.split(":")
-        return (split_hostname[0], split_hostname[1])
-    
-    def __isAuth(self, clientname: str, password: str) -> bool:
-        return (clientname in self.clients.keys() and self.clients[clientname][0] == password)
-    
-    def __isReady(self) -> bool:
-        return self.existingconnections == self.connections
-
-    def runServer(self) -> None:
-        @self.app.route("/")
+        @app.route("/")
         def home():
             return "connected"
 
-        @self.app.route("/checkClient", methods=["POST"])
+        @app.route("/checkClient", methods=["POST"])
         def checkClientHandler():
             clientname = str(request.json['clientname'])
-            return jsonify(clientname in self.clients.keys())
+            return jsonify(clientname in app.config['CLIENTS'].keys())
 
-        @self.app.route("/initializeGroup", methods=["POST"])
+        @app.route("/initializeGroup", methods=["POST"])
         def initializeGroupHandler():
             data = request.get_json()
             groupName = str(data['groupName'])
             clientList = list(data['clientList'])
 
-            if (groupName not in self.groups.keys()) and self.__isReady():
-                self.groups[groupName] = clientList
+            if (groupName not in app.config['GROUPS'].keys()) and app.config['CONNECTIONS'] == app.config['EXISTINGCONNECTIONS']:
+                app.config['GROUPS'][groupName] = clientList
                 return Response(status=200)
             else:
                 return Response(status=400)
 
-        @self.app.route("/initialize", methods=['GET'])
+        @app.route("/initialize", methods=['GET'])
         def initializeHandler():
             [clientname, password] = list(request.headers.get('Authorization').split(':'))
 
             def event_stream():
                 while True:
-                    if self.__isReady():
+                    if app.config['EXISTINGCONNECTIONS'] == app.config['CONNECTIONS']:
                         yield json.dumps({
                             "message": "ready"
                         })
@@ -71,41 +57,49 @@ class Server:
                         data = json.dumps({"message": "not ready"})
                         yield f'{data}\n\n'
                         time.sleep(3)
+                
+            isReady = (app.config['CONNECTIONS'] == app.config['EXISTINGCONNECTIONS'])
 
-            if(not(clientname in self.clients.keys()) and self.existingconnections < self.connections):
-                self.clients[clientname] = [password, Queue()]
-                self.existingconnections += 1
+            if(not(clientname in app.config['CLIENTS'].keys()) and isReady == False):
+                app.config['CLIENTS'][clientname] = [password, Queue()]
+                app.config['EXISTINGCONNECTIONS'] = app.config['EXISTINGCONNECTIONS'] + 1
                 return Response(event_stream(), status=200)
             else:
                 return Response(status=400)
 
-        @self.app.route("/sendmessage", methods=['POST'])
+        @app.route("/sendmessage", methods=['POST'])
         def sendHandler():
             [author, password] = list(request.headers.get('Authorization').split(':'))
             data = request.get_json()
             recipient = str(data['recipient'])
             message = str(data['message'])
 
-            if self.__isAuth(author, password) and recipient in self.clients.keys() and self.__isReady():
+            authorized = (author in app.config['CLIENTS'].keys() and app.config['CLIENTS'][author][0] == password)
+            isReady = (app.config['CONNECTIONS'] == app.config['EXISTINGCONNECTIONS'])
+
+            if authorized and recipient in app.config['CLIENTS'].keys() and isReady:
                 # list form = [sender, message, isGroupMessage]
-                self.clients[recipient][-1].put([author, message, False])
+                app.config['CLIENTS'][recipient][-1].put([author, message, False])
                 return Response(status=200)
             else:
                 return Response(status=400)
 
         
-        @self.app.route("/sendGroupMessage", methods=['POST'])
+        @app.route("/sendGroupMessage", methods=['POST'])
         def sendGroupMessageHandler():
             [sender, password] = list(request.headers.get('Authorization').split(':'))
             data = request.get_json()
             message = str(data['message'])
             groupName = str(data['groupName'])
 
-            if self.__isAuth(sender, password) and self.__isReady():
-                clientList: list = self.groups[groupName]
+            authorized = (sender in app.config['CLIENTS'].keys() and app.config['CLIENTS'][sender][0] == password)
+            isReady = (app.config['CONNECTIONS'] == app.config['EXISTINGCONNECTIONS'])
+
+            if authorized and isReady:
+                clientList: list = app.config['GROUPS'][groupName]
                 for client in clientList:
                     if client != sender:
-                        self.clients[client][-1].put([
+                        app.config['CLIENTS'][client][-1].put([
                             sender, message, True, groupName
                         ])
 
@@ -114,25 +108,28 @@ class Server:
                 return Response(status=400)
 
         
-        @self.app.route("/reset", methods=["GET"])
+        @app.route("/reset", methods=["GET"])
         def resetHandler():
             [clientname, password] = list(request.headers.get('Authorization').split(':'))
 
-            if self.__isAuth(clientname, password) and self.__isReady():
-                self.existingconnections = 0
-                self.clients = {}
-                self.groups = {}
+            authorized = (clientname in app.config['CLIENTS'].keys() and app.config['CLIENTS'][clientname][0] == password)
+            isReady = (app.config['CONNECTIONS'] == app.config['EXISTINGCONNECTIONS'])
+
+            if authorized and isReady:
+                app.config['EXISTINGCONNECTIONS'] = 0
+                app.config['CLIENTS'] = {}
+                app.config['GROUPS'] = {}
                     
                 return Response(status=200)
             else:
                 return Response(status=400)
         
-        @self.app.route("/listen", methods=['GET'])
+        @app.route("/listen", methods=['GET'])
         def listenHandler():
             [clientname, password] = list(request.headers.get('Authorization').split(':'))
 
             def event_stream():
-                clientQueue: Queue = self.clients[clientname][-1]
+                clientQueue: Queue = app.config['CLIENTS'][clientname][-1]
                 while True:
                     try:
                         messages = json.dumps(clientQueue.get(block=False))
@@ -141,13 +138,15 @@ class Server:
                     yield f'data: {messages}\n\n'
                     time.sleep(0.25)
             
-            if self.__isAuth(clientname, password) and self.__isReady():
+            authorized = (clientname in app.config['CLIENTS'].keys() and app.config['CLIENTS'][clientname][0] == password)
+            isReady = (app.config['CONNECTIONS'] == app.config['EXISTINGCONNECTIONS'])
+            
+            if authorized and isReady:
                 return Response(event_stream(), status=200)
             else:
                 return Response(status=403)
-
-
-        self.app.run(port=int(self.port), host=str(self.host), threaded=True)
+        
+        return app
 
 
 class Client:
