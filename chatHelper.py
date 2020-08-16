@@ -4,7 +4,6 @@ from queue import Queue, Empty
 import json
 from threading import Thread
 import time
-from sseclient import SSEClient
 
 
 class Server:
@@ -244,22 +243,39 @@ class Client:
         }
         
         def listen() -> None:
-            eventSource = SSEClient(listen_url, session=session, headers=headers)
-            for event in eventSource:
-                message_data = ''.join(list(event.data))
-                if message_data != 'no messages':
-                    message_attributes = json.loads(message_data)
-                    if len(message_attributes) < 4:
-                        group_name = None
-                    else:
-                        group_name = message_attributes[3]
+            response = session.get(listen_url, headers=headers, stream=True)
+            count = 0
+            buffer = ''
+            for content in response.iter_content(decode_unicode=True):
+                if self.__stop_listening == True:
+                    return
+                buffer += str(content)
+                if str(content) == '\n':
+                    if count > 0:
+                        clean_buffer = buffer.replace('data: ', '')
+                        clean_buffer = (clean_buffer[::-1].replace('\n\n', ''))[::-1]
+                        if clean_buffer != 'no messages':
+                            message_data = json.loads(clean_buffer)
+                            
+                            if len(message_data) < 4:
+                                group_name = None
+                            else:
+                                group_name = message_data[3]
 
-                    onMessage(Message(
-                        author=message_attributes[0],
-                        content=message_attributes[1],
-                        is_group_message=message_attributes[2],
-                        group_name=group_name
-                    )) 
+                            message_object = Message(
+                                author=message_data[0],
+                                content=message_data[1],
+                                is_group_message=message_data[2],
+                                group_name=group_name
+                            )
+                            onMessage(message_object)
+
+                        buffer = ''
+                        count = 0
+
+                        
+                    else:
+                        count += 1
                 
 
         
